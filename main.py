@@ -18,6 +18,7 @@ from pathlib import Path
 INPUT_DIR = Path(os.environ.get("MAKEFUN_INPUT_DIR", "/input"))
 OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 MICRO = 1_000_000
+BASE_FLOOR = 0.02
 SQRT2 = math.sqrt(2.0)
 
 
@@ -53,7 +54,7 @@ def mixture_bins(place, edges, components, uniform_weight, uniform_lo, uniform_h
     for b in range(len(edges) + 1):
         lo = -math.inf if b == 0 else edges[b - 1]
         hi = math.inf if b == len(edges) else edges[b]
-        p = 0.0
+        p = BASE_FLOOR / (len(edges) + 1)
         for weight, center, sd in components:
             p += weight * norm_mass(lo, hi, center, sd)
         overlap_lo = max(lo, uniform_lo)
@@ -100,14 +101,16 @@ def main():
     h = max(0.0, (sum(reads) / len(reads) - cut) / 3600.0) if reads else 1.0
 
     # --- per-coin features -------------------------------------------------
-    prev = marks[-2] if len(marks) >= 2 else None
-    prev_caps = {}
-    prev_ranks = {}
-    dt = 1.0
-    if prev is not None:
-        prev_caps = {row["mint"]: row["cap"] for row in prev["rows"]}
-        prev_ranks = {row["mint"]: row["rank"] for row in prev["rows"]}
-        dt = max(1e-9, (cut - timestamp(prev["at"])) / 3600.0)
+    # momentum over the last hour and stability over the whole history beat
+    # a single 10-minute delta, which is mostly noise.
+    window = marks[-7:]
+    cols = {}
+    for mark in window:
+        for row in mark["rows"]:
+            slot = cols.setdefault(row["mint"], {"caps": [], "ranks": []})
+            slot["caps"].append(row["cap"])
+            slot["ranks"].append(row["rank"])
+    span = max(1e-9, (cut - timestamp(window[0]["at"])) / 3600.0)
     appearances = {}
     for mark in marks:
         for row in mark["rows"]:
@@ -115,21 +118,24 @@ def main():
 
     candidates = {}
     union = {row["mint"] for row in chart}
-    if prev:
-        union |= {row["mint"] for row in sorted(prev["rows"], key=lambda r: r["rank"])[:120]}
+    for mark in window[-2:]:
+        union |= {row["mint"] for row in sorted(mark["rows"], key=lambda r: r["rank"])[:120]}
     for mint in union:
         row = next((r for r in chart if r["mint"] == mint), None)
         if row is None:
-            prow = next((r for r in prev["rows"] if r["mint"] == mint), None)
-            if prow is None:
+            for mark in reversed(window):
+                row = next((r for r in mark["rows"] if r["mint"] == mint), None)
+                if row is not None:
+                    break
+            if row is None:
                 continue
-            row = dict(prow)
-            row["cap"] = prev_caps.get(mint, prow["cap"])
+            row = dict(row)
             row["rank"] = 200
+        slot = cols.get(mint, {"caps": [row["cap"]], "ranks": [row["rank"]]})
         cnow = row["cap"]
-        cprev = prev_caps.get(mint, cnow)
-        vlog = math.log10(max(cnow, 1.0)) - math.log10(max(cprev, 1.0))
-        vhat = max(-2.0, min(2.5, vlog / dt))
+        vlog = math.log10(max(slot["caps"][-1], 1.0)) - math.log10(max(slot["caps"][0], 1.0))
+        vhat = max(-2.0, min(2.5, vlog / span))
+        stability = sum(1 for r in slot["ranks"] if r <= 25) / float(len(slot["ranks"]))
         age_h = max(0.0, (cut - timestamp(row["created_at"])) / 3600.0)
         candidates[mint] = {
             "rank": row["rank"],
@@ -138,6 +144,7 @@ def main():
             "age": age_h,
             "venue": row.get("venue", "curve"),
             "seen": appearances.get(mint, 1),
+            "stab": stability,
         }
 
     # known-coin mass per place: short horizons keep more incumbents, long
@@ -149,7 +156,7 @@ def main():
     # self-defeating: name it well or leave it unnamed. Expected read chart
     # holds ~70-80 ids we cannot name (fresh launches), so the unnamed
     # share lands near (1-s_known)/78.
-    q_min = max(0.004, (1.0 - s_known) / 78.0)
+    q_min = max(0.0015, (1.0 - s_known) / 200.0)
 
     probabilities = []
     aggregate = {}
@@ -160,10 +167,12 @@ def main():
             w = math.exp(-lam * abs(feat["rank"] - place))
             w *= math.exp(0.45 * feat["vhat"])
             if feat["venue"] == "pool":
-                w *= 1.18
-            elif feat["age"] < 4.0:
-                w *= 1.30
-            w *= 1.0 + 0.05 * min(feat["seen"], 12)
+                w *= 1.20 + 0.40 * feat["stab"]
+            else:
+                w *= 1.0 + 0.45 * feat["stab"]
+                if feat["age"] < 4.0:
+                    w *= 1.25
+            w *= 1.0 + 0.03 * min(feat["seen"], 12)
             weights[mint] = w
         total = sum(weights.values())
         named = []
@@ -173,14 +182,15 @@ def main():
             cap_sol = candidates[mint]["cap"] / 1e9
             if q >= q_min:
                 named.append({"mint": mint, "place": place, "p": q})
-            elif cap_sol < 60.0:
-                # deep curve junk: named at p=0 — these sit near the bottom
-                # of the read chart when they survive at all, and striking
-                # them from the unnamed pool fattens the share the fresh
-                # launches (unnameable) receive.
+            elif cap_sol < 900.0:
+                # coins we would name too low to matter: named at p=0 they
+                # still leave the unnamed pool when they sit on the read
+                # chart, fattening the share the unnameable fresh launches
+                # receive. Highest caps survive to the read chart, so those
+                # go first.
                 junk.append({"mint": mint, "place": place, "p": 0.0, "cap_sol": cap_sol})
         named.sort(key=lambda r: (-r["p"], r["mint"]))
-        junk.sort(key=lambda r: (r["cap_sol"], r["mint"]))
+        junk.sort(key=lambda r: (-r["cap_sol"], r["mint"]))
         rows = named + junk
         for r in rows:
             r.pop("cap_sol", None)
@@ -198,25 +208,26 @@ def main():
     # --- sizes: the cap LEVEL each place sits at, as a mixture --------------
     edges = task["size"]["edges"]
     logcaps = [math.log10(max(chart[k - 1]["cap"], 1.0) / 1e9) for k in range(1, places + 1)]
-    floor_level = logcaps[places - 1]
     mean_level = sum(logcaps) / len(logcaps)
     hw = min(h, 7.0)
-    wA = 0.46 - 0.012 * hw
-    wB = 0.16 + 0.007 * hw
-    wC = 0.09 + 0.004 * hw
-    wD = 0.16
-    wE = max(0.08, 1.0 - wA - wB - wC - wD)
+    # At long horizons the place levels drift away from the cut's levels and
+    # the graduation band (~2k SOL) plus survivor growth take the weight.
+    wA = 0.44 - 0.010 * hw
+    wB = 0.17 + 0.010 * hw
+    wC = 0.10 + 0.010 * hw
+    wD = 0.13 - 0.006 * hw
+    wE = max(0.09, 1.0 - wA - wB - wC - wD)
     sizes = []
     for k in range(1, places + 1):
-        lk = 0.72 * logcaps[k - 1] + 0.28 * mean_level
-        sdA = 0.22 + 0.020 * hw
+        lk = 0.70 * logcaps[k - 1] + 0.30 * mean_level
+        sdA = 0.20 + 0.022 * hw
         comp = [
             (wA, lk, sdA),
-            (wB, floor_level + 0.10, 0.33 + 0.010 * hw),
-            (wC, floor_level + (0.75 if k == 1 else 0.55), 0.42 + 0.010 * hw),
-            (wD, floor_level - 0.55, 0.55),
+            (wB, 3.34, 0.22 + 0.008 * hw),
+            (wC, mean_level + 0.40 + 0.020 * hw, 0.40 + 0.012 * hw),
+            (wD, mean_level - 0.60, 0.50),
         ]
-        sizes.extend(mixture_bins(k, edges, comp, wE, 1.6, 5.1))
+        sizes.extend(mixture_bins(k, edges, comp, wE, 1.9, 5.4))
 
     # --- top5: aggregate belief over places --------------------------------
     top5 = sorted(aggregate, key=lambda m: (-aggregate[m], rank_by_mint.get(m, 999)))[:places]
