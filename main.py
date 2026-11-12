@@ -195,7 +195,7 @@ def main():
 
     # known-coin mass per place: short horizons keep more incumbents, long
     # horizons hand the places to coins born after the cut.
-    s_known = 0.52 - 0.032 * max(0.0, min(h - 1.5, 9.0))
+    s_known = 0.44 - 0.022 * max(0.0, min(h - 1.5, 9.0))
     s_known = max(0.20, min(0.55, s_known))
     lam = max(0.14, 0.22 - 0.009 * max(0.0, h - 1.5))
     # Naming a coin below the unnamed share it would otherwise receive is
