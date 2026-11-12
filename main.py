@@ -97,7 +97,7 @@ def mc_levels(place, logcaps, venues, h, draws=400):
             death = 4.5 if ven != "pool" else 0.9
             if rng.random() < 1.0 - math.exp(-death * h):
                 continue
-            sig = min((0.28 if ven != "pool" else 0.85) * math.sqrt(max(h, 1e-3)), 2.0)
+            sig = min((0.24 if ven != "pool" else 0.75) * math.sqrt(max(h, 1e-3)), 2.0)
             vals.append(lg + 0.012 * h - conv * (lg - 3.30) + rng.gauss(0, sig))
         for _ in range(n_star):
             vals.append(rng.gauss(3.28, 0.22))
@@ -275,7 +275,7 @@ def main():
             (wC, mean_level + 0.40 + 0.020 * hw, 0.40 + 0.012 * hw),
             (wD, mean_level - 0.60, 0.50),
         ]
-        mix = mc_bins(k, edges, logcols, venues, h, 0.5)
+        mix = mc_bins(k, edges, logcols, venues, h, 0.65)
         raw = []
         n_bins = len(edges) + 1
         for b in range(n_bins):
@@ -287,7 +287,7 @@ def main():
             overlap_lo, overlap_hi = max(lo, 1.9), min(hi, 5.4)
             if overlap_hi > overlap_lo:
                 p += max(0.0, 1.0 - wA - wB - wC - wD) * (overlap_hi - overlap_lo) / 3.5
-            raw.append(0.50 * p + 0.50 * mix[b])
+            raw.append(0.35 * p + 0.65 * mix[b])
         total = sum(raw)
         units = [int(MICRO * x / total) for x in raw]
         left = MICRO - sum(units)
