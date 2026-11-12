@@ -12,6 +12,7 @@ and a uniform safety floor, widened by horizon.
 import json
 import math
 import os
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,7 @@ INPUT_DIR = Path(os.environ.get("MAKEFUN_INPUT_DIR", "/input"))
 OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 MICRO = 1_000_000
 BASE_FLOOR = 0.02
+MC_SEED = 9000
 SQRT2 = math.sqrt(2.0)
 
 
@@ -72,6 +74,50 @@ def mixture_bins(place, edges, components, uniform_weight, uniform_lo, uniform_h
     for b in order[:left]:
         units[b] += 1
     return [{"place": place, "bin": b, "p": units[b] / MICRO} for b in range(len(units)) if units[b]]
+
+
+def mc_levels(place, logcaps, venues, h, draws=400):
+    """Monte Carlo cap LEVELS at a place: survivors drift and die, stars are
+    born around the graduation band. Deterministic per place."""
+    rng = random.Random(MC_SEED + place)
+    rate = 12.0 * h
+    limit = math.exp(-rate)
+    p = 1.0
+    n_star = 0
+    while True:
+        p *= rng.random()
+        if p <= limit:
+            break
+        n_star += 1
+    conv = min(0.12 * (h ** 0.6), 0.85)
+    out = []
+    for _ in range(draws):
+        vals = []
+        for lg, ven in zip(logcaps, venues):
+            death = 4.5 if ven != "pool" else 0.9
+            if rng.random() < 1.0 - math.exp(-death * h):
+                continue
+            sig = min((0.28 if ven != "pool" else 0.85) * math.sqrt(max(h, 1e-3)), 2.0)
+            vals.append(lg + 0.012 * h - conv * (lg - 3.30) + rng.gauss(0, sig))
+        for _ in range(n_star):
+            vals.append(rng.gauss(3.28, 0.22))
+        vals.sort(reverse=True)
+        out.append(vals[place - 1] if len(vals) >= place else 1.5)
+    return out
+
+
+def mc_bins(place, edges, logcaps, venues, h, alpha):
+    """Smoothed MC histogram per place, mixed with a uniform base floor."""
+    n = len(edges) + 1
+    hist = [0.0] * n
+    for lv in mc_levels(place, logcaps, venues, h):
+        b = 0 if lv < edges[0] else (n - 1 if lv >= edges[-1] else int((lv - edges[0]) / 0.05) + 1)
+        for d, w in ((0, 0.25), (1, 0.5), (-1, 0.25)):
+            bb = b + d
+            if 0 <= bb < n:
+                hist[bb] += w
+    total = sum(hist) or 1.0
+    return [alpha * x / total + (1.0 - alpha) * BASE_FLOOR / n for x in hist]
 
 
 def main():
@@ -218,6 +264,8 @@ def main():
     wD = 0.13 - 0.006 * hw
     wE = max(0.09, 1.0 - wA - wB - wC - wD)
     sizes = []
+    venues = [row.get("venue", "curve") for row in chart[:100]]
+    logcols = [math.log10(max(row["cap"], 1.0) / 1e9) for row in chart[:100]]
     for k in range(1, places + 1):
         lk = 0.70 * logcaps[k - 1] + 0.30 * mean_level
         sdA = 0.20 + 0.022 * hw
@@ -227,7 +275,26 @@ def main():
             (wC, mean_level + 0.40 + 0.020 * hw, 0.40 + 0.012 * hw),
             (wD, mean_level - 0.60, 0.50),
         ]
-        sizes.extend(mixture_bins(k, edges, comp, wE, 1.9, 5.4))
+        mix = mc_bins(k, edges, logcols, venues, h, 0.35)
+        raw = []
+        n_bins = len(edges) + 1
+        for b in range(n_bins):
+            lo = -math.inf if b == 0 else edges[b - 1]
+            hi = math.inf if b == len(edges) else edges[b]
+            p = BASE_FLOOR / n_bins
+            for weight, center, sd in comp:
+                p += weight * norm_mass(lo, hi, center, sd)
+            overlap_lo, overlap_hi = max(lo, 1.9), min(hi, 5.4)
+            if overlap_hi > overlap_lo:
+                p += max(0.0, 1.0 - wA - wB - wC - wD) * (overlap_hi - overlap_lo) / 3.5
+            raw.append(0.65 * p + 0.35 * mix[b])
+        total = sum(raw)
+        units = [int(MICRO * x / total) for x in raw]
+        left = MICRO - sum(units)
+        order = sorted(range(n_bins), key=lambda b: (raw[b] / total * MICRO - units[b], -b), reverse=True)
+        for b in order[:left]:
+            units[b] += 1
+        sizes.extend({"place": k, "bin": b, "p": units[b] / MICRO} for b in range(n_bins) if units[b])
 
     # --- top5: aggregate belief over places --------------------------------
     top5 = sorted(aggregate, key=lambda m: (-aggregate[m], rank_by_mint.get(m, 999)))[:places]
