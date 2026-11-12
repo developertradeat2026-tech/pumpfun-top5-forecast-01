@@ -216,7 +216,7 @@ def main():
             (wC, floor_level + (0.75 if k == 1 else 0.55), 0.42 + 0.010 * hw),
             (wD, floor_level - 0.55, 0.55),
         ]
-        sizes.extend(mixture_bins(k, edges, comp, wE, 2.0, 4.9))
+        sizes.extend(mixture_bins(k, edges, comp, wE, 1.6, 5.1))
 
     # --- top5: aggregate belief over places --------------------------------
     top5 = sorted(aggregate, key=lambda m: (-aggregate[m], rank_by_mint.get(m, 999)))[:places]
