@@ -1,0 +1,4 @@
+.hermes/
+.codex/
+__pycache__/
+out/
