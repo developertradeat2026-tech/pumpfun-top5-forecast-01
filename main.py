@@ -195,7 +195,7 @@ def main():
 
     # known-coin mass per place: short horizons keep more incumbents, long
     # horizons hand the places to coins born after the cut.
-    s_known = 0.44 - 0.022 * max(0.0, min(h - 1.5, 9.0))
+    s_known = 0.52 - 0.032 * max(0.0, min(h - 1.5, 9.0))
     s_known = max(0.20, min(0.55, s_known))
     lam = max(0.14, 0.22 - 0.009 * max(0.0, h - 1.5))
     # Naming a coin below the unnamed share it would otherwise receive is
@@ -275,7 +275,7 @@ def main():
             (wC, mean_level + 0.40 + 0.020 * hw, 0.40 + 0.012 * hw),
             (wD, mean_level - 0.60, 0.50),
         ]
-        mix = mc_bins(k, edges, logcols, venues, h, 0.65)
+        mix = mc_bins(k, edges, logcols, venues, h, 0.8)
         raw = []
         n_bins = len(edges) + 1
         for b in range(n_bins):
@@ -287,7 +287,7 @@ def main():
             overlap_lo, overlap_hi = max(lo, 1.9), min(hi, 5.4)
             if overlap_hi > overlap_lo:
                 p += max(0.0, 1.0 - wA - wB - wC - wD) * (overlap_hi - overlap_lo) / 3.5
-            raw.append(0.35 * p + 0.65 * mix[b])
+            raw.append(0.20 * p + 0.80 * mix[b])
         total = sum(raw)
         units = [int(MICRO * x / total) for x in raw]
         left = MICRO - sum(units)
