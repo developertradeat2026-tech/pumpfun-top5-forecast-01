@@ -97,10 +97,10 @@ def mc_levels(place, logcaps, venues, h, draws=400):
             death = 4.5 if ven != "pool" else 0.9
             if rng.random() < 1.0 - math.exp(-death * h):
                 continue
-            sig = min((0.24 if ven != "pool" else 0.75) * math.sqrt(max(h, 1e-3)), 2.0)
-            vals.append(lg + 0.012 * h - conv * (lg - 3.30) + rng.gauss(0, sig))
+            sig = min((0.16 if ven != "pool" else 0.55) * math.sqrt(max(h, 1e-3)), 2.0)
+            vals.append(lg + 0.008 * h - min(0.16 * (h ** 0.6), 0.9) * (lg - 3.30) + rng.gauss(0, sig))
         for _ in range(n_star):
-            vals.append(rng.gauss(3.28, 0.22))
+            vals.append(rng.gauss(3.28, 0.15))
         vals.sort(reverse=True)
         out.append(vals[place - 1] if len(vals) >= place else 1.5)
     return out
